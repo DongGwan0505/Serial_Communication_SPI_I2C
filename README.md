@@ -1,161 +1,106 @@
 # Serial_Communication_SPI_I2C
 
-🔧 Serial Communication Project
-SPI & I2C Build & Validation
+# 🔧 Serial Communication Project  
+### SPI & I2C Build & Validation  
+👤 **Author: 이동관**  
+📅 **2025-11-17**
 
-👤 Author: 이동관
-📅 2025-11-17
+> HARMAN System Semiconductor – SystemVerilog 기반 시리얼 통신  
+> Master/Slave 설계 + Simulation + HW 검증 프로젝트
 
-HARMAN System Semiconductor – SystemVerilog 기반 시리얼 통신 Master/Slave 설계 + Simulation + HW 검증 프로젝트
+---
 
+## 📌 Project Overview
+본 프로젝트는 **SPI / I2C 시리얼 통신 체계**를 직접 설계하고  
+**Vivado Simulation & FPGA HW 테스트**를 통해 동작을 검증하는 것을 목표로 합니다.
 
-harman2_25_11_17--000
+### 🎯 Goals
+- SPI / I2C **Master & Slave RTL 설계**
+- Vivado 기반 Simulation & Logic Analyzer 실측 데이터 분석
+- UVM Testbench 구성 및 기능 검증
+- Vitis C 프로그램 기반 실동작 확인
 
-📌 Project Overview
+---
 
-본 프로젝트는 SPI / I2C 시리얼 통신 체계의 이해와 직접 구현,
-그리고 Vivado Simulation, UVM Verification, 실제 FPGA 보드 간 통신 검증을 목표로 합니다.
+## 🧩 Architecture
 
+### 🟦 SPI Block Diagram
+- SCLK, MOSI, MISO, SS_bar 4-Line 통신
+- Counter 모듈 데이터를 Master에서 Slave로 반복 전송
+- 8bit MSB First 전송
 
-harman2_25_11_17--000
+**Simulation Result**
+- 데이터 전송 정상 동작 확인
+- 랜덤 데이터(예: `0x3E`) 수신 확인
 
-🎯 Goals
+| 기능 | 상세 |
+|------|------|
+| 통신 방식 | Synchronous / Full-duplex |
+| 데이터 방향 | Master ↔ Slave |
+| 검증 | Vivado Simulation |
 
-SPI / I2C Master & Slave RTL 설계
+---
 
-Vivado 기반 Simulation & Logic Analyzer 실측 신호 분석
+### 🟩 I2C Block Diagram
+- 7bit Slave Address + R/W bit
+- Slave 내부 4개의 Register에 데이터 Read/Write 가능
+- MSB First 전송 / 수신
 
-UVM 검증 환경 구성
+**Simulation Result**
+- `0xA0` Write 정상 수신 → Register 저장 확인
+- Read 시 Logic Analyzer로 데이터 검증 완료
 
-Vitis C 프로그램을 통한 I2C HW 동작 검증
+| 기능 | 상세 |
+|------|-----|
+| 통신 방식 | Synchronous / Half-duplex |
+| 검증 방식 | Vivado + Saleae Logic Analyzer + Vitis FW |
 
+---
 
-harman2_25_11_17--000
+## 🧪 Verification Environment
 
-🧩 Architecture
-🟦 SPI Block Diagram
+| 항목 | SPI | I2C |
+|------|-----|-----|
+| Simulation | Vivado | Vivado |
+| HW Test | FPGA 보드 2대 연결 | Logic Analyzer 사용 |
+| Software Control | - | Vitis C 코드 |
+| UVM 적용 | ✔️ | ✔️ |
 
-4-Wire Communication: SCLK, MOSI, MISO, SS bar
+---
 
-Counter 모듈 데이터 송수신 반복
+## 🚧 Trouble Shooting
 
+| Issue | Cause | Fix |
+|------|------|-----|
+| READ State 진입 실패 | FSM 분기 조건 문제 | 상태 조건 로직 수정 |
+| Read 시 FF 값 수신 | 마지막 비트 처리 오류 | bit_cnt == 0 shift 방지 |
 
-harman2_25_11_17--000
+---
 
-Simulation 결과
+## 🙌 Retrospective
+- Master, Slave 개별 구현은 수월했지만 **연동 단계에서 디버깅 난이도 급상승**
+- HW 통신 특성상 **작은 타이밍 오류**도 전체 동작에 영향
+- 협업 시 **인터페이스 명세 & 신호 공유가 매우 중요**하다는 점 체감  
+- 향후 개선 예정:
+  - Multi-Byte 전송 구조 확장
+  - 다양한 Error Handling 추가
 
-정상적인 8-bit 전송 검증
+---
 
-랜덤 데이터(예: 0x3E) 전송 확인 완료
-
-
-harman2_25_11_17--000
-
-기능	상세
-통신 방식	Synchronous / Full-duplex
-데이터 방향	Master <-> Slave
-검증	Vivado Sim + 영상 데모
-🟩 I2C Block Diagram
-
-4개의 Register를 갖는 Slave
-
-Address + R/W bit 처리
-
-Write/Read 모두 MSB First
-
-
-harman2_25_11_17--000
-
-Simulation 결과
-
-0xA0(Write) 정상 수신
-
-Slave Registers(0~3) 데이터 저장 및 업데이트
-
-Logic Analyzer 로 Read 확인
-
-
-harman2_25_11_17--000
-
-기능	상세
-통신 방식	Synchronous / Half-duplex
-Addressing	7-bit Address + R/W bit
-검증	Vivado Sim + Saleae Logic + Vitis
-🧪 Verification Environment
-항목	SPI	I2C
-Simulation	Vivado	Vivado
-HW Debug	FPGA 보드 2대 연결	Saleae Logic Analyzer
-Additional	UART 기반 Debug 연결	Vitis C 코드
-UVM 적용	✔️	✔️
-🚧 Trouble Shooting & Fixes
-Issue	Cause	Solution
-I2C Master가 READ 상태로 진입 못함	FSM 처리 오류	상태 분기 조건 수정
-Read 시 FF 값 수신	마지막 비트 처리 문제	bit_cnt == 0 일 때 shift 금지
-
-
-harman2_25_11_17--000
-
-		
-🙌 Retrospective (Thought)
-
-Master / Slave 단일 설계보다 연동 단계에서 복잡도가 급증
-
-작은 실수도 CRC, ACK 등 신뢰성 문제 발생 → 정밀한 디버깅 필요
-
-협업한다면 통신 프로토콜/인터페이스 명세 공유의 필수성 체감
-
-향후 개선:
-
-Multi-Byte Read/Write 구조 확장 계획
-
-
-harman2_25_11_17--000
-
-📁 Project Structure (예시)
+## 📁 Project Structure (예시)
+```bash
 📦 serial-communication
 ├── spi/
 │   ├── spi_master.sv
 │   ├── spi_slave.sv
 │   ├── tb_spi.sv
-│   └── uvm_env_spi/
+│   └── uvm_spi/
 ├── i2c/
 │   ├── i2c_master.sv
 │   ├── i2c_slave.sv
 │   ├── tb_i2c.sv
-│   └── uvm_env_i2c/
+│   └── uvm_i2c/
 ├── docs/
-│   └── presentation.pdf  # 발표 자료
+│   └── presentation.pdf
 └── README.md
 
-🎥 Demo & Results
-항목	링크
-SPI HW Demo 영상	(추가 예정)
-I2C HW Demo 영상	(추가 예정)
-Simulation Waveforms	포함 완료
-🌱 Future Work
-
-I2C Multi-Byte Burst Transfer
-
-Error Handling / Repeated START / Timing Margin 개선
-
-UVM Coverage Refine
-
-AXI Bus Wrapper 연동
-
-🏷 Skills Used
-
-SystemVerilog RTL Design
-
-Vivado Simulation & ILA Debug
-
-Saleae Logic 2 분석
-
-UVM Verification
-
-FPGA SoC Firmware (Vitis)
-
-📞 Contact
-
-이동관 (DongGwan Lee)
-Email: (원하면 추가)
-GitHub: 추가 예정 링크
