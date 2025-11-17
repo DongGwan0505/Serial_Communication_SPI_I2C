@@ -1,0 +1,343 @@
+interface i2c_Intf();
+    logic clk;
+    logic reset;
+    logic [7:0] tx_data;
+    logic i2c_start;
+    logic i2c_en;
+    logic tx_done;
+    logic ready;
+    logic [7:0] rx_data;
+    logic [7:0] led;
+endinterface
+
+`include "uvm_macros.svh"
+import uvm_pkg::*;
+
+class i2c_seq_item extends uvm_sequence_item;
+    rand bit [7:0] tx_data;
+    bit i2c_start;
+    bit i2c_en;
+    bit tx_done;
+    bit ready;
+    bit [7:0] rx_data;
+    bit [7:0] led;
+
+   function new(string name = "i2c_ITEM");
+      super.new(name);      
+   endfunction
+
+   `uvm_object_utils_begin(i2c_seq_item)
+      `uvm_field_int(tx_data, UVM_DEFAULT)
+      `uvm_field_int(i2c_start, UVM_DEFAULT)
+      `uvm_field_int(i2c_en, UVM_DEFAULT)
+      `uvm_field_int(tx_done, UVM_DEFAULT)
+      `uvm_field_int(ready, UVM_DEFAULT)
+      `uvm_field_int(rx_data, UVM_DEFAULT)
+      `uvm_field_int(led, UVM_DEFAULT)
+   `uvm_object_utils_end
+endclass
+
+
+
+class i2c_sequence extends uvm_sequence #(i2c_seq_item);
+   `uvm_object_utils(i2c_sequence)
+
+   function new(string name = "SEQ");
+      super.new(name);
+   endfunction
+
+   i2c_seq_item i2c_item;
+
+   virtual task body();
+      i2c_item = i2c_seq_item::type_id::create("I2C_ITEM");
+
+      for (int i = 0; i < 50; i++) begin
+         start_item(i2c_item);
+         i2c_item.randomize();
+         `uvm_info("SEQ", $sformatf("I2C item to driver tx_data:%0d, i2c_start:%0d, i2c_en:%0d, tx_done:%0d, ready:%0d, rx_data:%0d, led:%0d",
+                              i2c_item.tx_data, i2c_item.i2c_start, i2c_item.i2c_en, i2c_item.tx_done, i2c_item.ready, i2c_item.rx_data, i2c_item.led), UVM_NONE);
+         
+         // i2c_item.print(uvm_default_line_printer);
+
+         finish_item(i2c_item);
+      end
+   endtask
+
+endclass
+
+
+
+class i2c_monitor extends uvm_monitor;
+   `uvm_component_utils(i2c_monitor)
+
+   uvm_analysis_port #(i2c_seq_item) send;
+
+   function new(string name = "MON", uvm_component parent);
+      super.new(name, parent);
+      send = new("WRITE", this);      
+   endfunction
+
+   i2c_seq_item i2c_item;
+   virtual i2c_Intf a_if;
+
+   virtual function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      i2c_item = i2c_seq_item::type_id::create("I2C_ITEM");
+      if (!uvm_config_db#(virtual i2c_Intf)::get(this, "", "a_if", a_if)) begin
+         `uvm_fatal("MON", "I2C_intf not found in uvm_config_db");
+      end
+   endfunction
+
+   virtual task run_phase(uvm_phase phase);
+      
+      forever begin
+         @(posedge a_if.clk);
+         @(posedge a_if.clk);
+         wait (a_if.tx_done); 
+
+         @(posedge a_if.clk);
+         wait (a_if.tx_done);
+         @(posedge a_if.clk);
+         wait (a_if.tx_done);
+         @(posedge a_if.clk);
+
+         i2c_item.tx_data = a_if.tx_data;
+         i2c_item.i2c_start = a_if.i2c_start;
+         i2c_item.i2c_en = a_if.i2c_en;
+         i2c_item.tx_done = a_if.tx_done;
+         i2c_item.ready = a_if.ready;
+         i2c_item.rx_data = a_if.rx_data;
+         i2c_item.led = a_if.led;
+
+         `uvm_info("MON", $sformatf("sampled tx_data:%0d, i2c_start:%0d, i2c_en:%0d, tx_done:%0d, ready:%0d, rx_data:%0d, led:%0d",
+                              i2c_item.tx_data, i2c_item.i2c_start, i2c_item.i2c_en, i2c_item.tx_done, i2c_item.ready, i2c_item.rx_data, i2c_item.led), UVM_LOW);
+         
+         // i2c_item.print(uvm_default_line_printer);
+         
+         send.write(i2c_item);
+      end
+   endtask
+
+endclass
+
+
+
+class i2c_driver extends uvm_driver #(i2c_seq_item);
+   `uvm_component_utils(i2c_driver)
+
+   function new(string name = "DRV", uvm_component parent);
+      super.new(name, parent);
+   endfunction
+
+   i2c_seq_item i2c_item;
+   virtual i2c_Intf a_if;
+
+
+
+   virtual function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      i2c_item = i2c_seq_item::type_id::create("I2C_ITEM");
+
+      if (!uvm_config_db#(virtual i2c_Intf)::get(this, "", "a_if", a_if)) begin
+         `uvm_fatal("DRV", "i2c_intf not found in uvm_config_db");
+      end
+   endfunction
+
+   virtual task run_phase(uvm_phase phase);
+      a_if.reset = 1;
+      #10 a_if.reset = 0;
+
+   
+      forever begin
+         seq_item_port.get_next_item(i2c_item);
+
+         //주소 선택 및 WRITE
+         a_if.tx_data = 8'b0000_0100;
+         a_if.i2c_start = 1;
+         a_if.i2c_en = 1;
+         @(posedge a_if.clk);
+         repeat (9750) @(posedge a_if.clk);
+         a_if.tx_data = i2c_item.tx_data; 
+         @(posedge a_if.clk);
+         a_if.i2c_en = 0;
+         a_if.i2c_start = 0;
+         repeat (10251) @(posedge a_if.clk);
+
+
+         //주소 선택 및 이전 WRITE 값을 READ
+         a_if.tx_data = 8'b0000_0101;
+         a_if.i2c_en = 1;
+         a_if.i2c_start = 1;
+         @(posedge a_if.clk);
+         repeat (9750) @(posedge a_if.clk);
+         @(posedge a_if.clk);
+         a_if.i2c_en = 0;
+         a_if.i2c_start = 0;
+         repeat (10251) @(posedge a_if.clk);
+
+
+         `uvm_info("DRV", $sformatf("Drive DUT tx_data:%0d, i2c_start:%0d, i2c_en:%0d, tx_done:%0d, ready:%0d, rx_data:%0d, led:%0d",
+                              i2c_item.tx_data, i2c_item.i2c_start, i2c_item.i2c_en, i2c_item.tx_done, i2c_item.ready, i2c_item.rx_data, i2c_item.led), UVM_LOW);
+         
+         // i2c_item.print(uvm_default_line_printer);
+         
+         @(posedge a_if.clk);
+         a_if.tx_data = i2c_item.tx_data;
+         seq_item_port.item_done();
+      end
+   endtask //
+
+endclass
+
+
+
+class i2c_scoreboard extends uvm_scoreboard;
+   `uvm_component_utils(i2c_scoreboard)
+
+   uvm_analysis_imp #(i2c_seq_item, i2c_scoreboard) recv;
+
+   i2c_seq_item i2c_item;
+
+
+   function new(string name = "SCB", uvm_component parent);
+      super.new(name, parent);
+      recv = new("READ", this);
+   endfunction //new()
+
+   virtual function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      i2c_item = i2c_seq_item::type_id::create("I2C_ITEM");
+   endfunction
+
+   virtual function void write(i2c_seq_item item);
+      i2c_item = item;
+      // i2c_item.print(uvm_default_line_printer);
+
+      if (i2c_item.tx_data == i2c_item.led) begin
+         `uvm_info("SCB", $sformatf("*** I2C TEST PASSED *** tx_data:%0d, led:%0d",
+                              i2c_item.tx_data, i2c_item.led), UVM_LOW);
+          
+      end
+      else begin
+         `uvm_info("SCB", $sformatf("*** I2C TEST FAILED *** Received tx_data:%0d, led:%0d",
+                              i2c_item.tx_data, i2c_item.led), UVM_LOW);
+         
+      end
+
+   endfunction
+
+endclass //i2c_scoreboard
+
+
+
+
+class i2c_agent extends uvm_agent;
+   `uvm_component_utils(i2c_agent)
+
+   function new(string name = "AGT", uvm_component parent);
+      super.new(name, parent);
+   endfunction //new()
+
+   i2c_monitor i2c_mon;
+   i2c_driver i2c_drv;
+   uvm_sequencer #(i2c_seq_item) i2c_sqr;
+
+   virtual function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      i2c_sqr = uvm_sequencer#(i2c_seq_item)::type_id::create("SQR", this);
+      i2c_drv = i2c_driver::type_id::create("DRV", this);
+      i2c_mon = i2c_monitor::type_id::create("MON", this);
+   endfunction
+
+   virtual function void connect_phase(uvm_phase phase);
+      super.connect_phase(phase);
+      i2c_drv.seq_item_port.connect(i2c_sqr.seq_item_export);      
+   endfunction
+
+
+endclass //i2c_agent
+
+
+
+class i2c_envirnment extends uvm_env;
+   `uvm_component_utils(i2c_envirnment)
+
+   function new(string name = "ENV", uvm_component parent);
+      super.new(name, parent);
+   endfunction
+
+   i2c_scoreboard i2c_scb;
+   i2c_agent i2c_agt;
+
+   virtual function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      i2c_scb = i2c_scoreboard::type_id::create("SCB", this);
+      i2c_agt = i2c_agent::type_id::create("AGT", this);
+   endfunction
+
+   virtual function void connect_phase(uvm_phase phase);
+      super.connect_phase(phase);
+      i2c_agt.i2c_mon.send.connect(i2c_scb.recv); // TLM Port 연결   / 모니터에서 스코어보드로 던져주는 절차   
+   endfunction
+
+endclass
+
+
+
+class test extends uvm_test;
+   `uvm_component_utils(test)
+
+   function new(string name = "TEST", uvm_component c);
+      super.new(name, c);
+   endfunction
+
+   i2c_sequence i2c_seq;
+   i2c_envirnment i2c_env;
+
+   virtual function void build_phase(uvm_phase phase); // overriding
+      super.build_phase(phase);
+      i2c_seq = i2c_sequence::type_id::create("SEQ", this); // factory excute. i2c_seq
+      i2c_env = i2c_envirnment::type_id::create("ENV", this);   
+   endfunction
+
+   virtual task run_phase(uvm_phase phase);
+      phase.raise_objection(this); // until drop
+      i2c_seq.start(i2c_env.i2c_agt.i2c_sqr);
+      phase.drop_objection(this); // objection 해제 run_phase 종료료
+   endtask
+
+endclass
+
+
+module tb_i2c_top();
+   // test i2c_test;
+   i2c_Intf a_if();
+
+    i2c_top dut(
+        .clk(a_if.clk),
+        .reset(a_if.reset),
+        .tx_data(a_if.tx_data),
+        .i2c_start(a_if.i2c_start),
+        .i2c_en(a_if.i2c_en),
+        .tx_done(a_if.tx_done),
+        .ready(a_if.ready),
+        .rx_data(a_if.rx_data),
+        .led(a_if.led)
+    );
+
+   always #5 a_if.clk = ~a_if.clk;
+
+   initial begin
+      // GUI로 보기 위함! (Verdi)
+      // 그걸 위해 테스트벤치의 데이터 수집, 저장!
+      $fsdbDumpvars(0);
+      $fsdbDumpfile("wave.fsdb");
+      a_if.clk = 0;
+
+      // i2c_test = new("TEST", null);
+      uvm_config_db #(virtual i2c_Intf)::set(null, "*", "a_if", a_if);
+
+      run_test();   
+   end
+
+endmodule

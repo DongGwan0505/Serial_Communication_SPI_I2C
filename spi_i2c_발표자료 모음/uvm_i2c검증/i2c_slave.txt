@@ -1,0 +1,145 @@
+`timescale 1ns / 1ps
+
+module I2C_Slave_LED (
+    //input clk,
+    input reset,
+    //signal - Master
+    input SCL_0,
+    inout SDA_0,
+    //LED
+    output reg [7:0] led,
+    output [2:0] slv_state
+);
+
+    //sda 읽기
+
+
+    localparam LED_Slave_ADDR = 7'b0000010;  // 이 slave 주소는 2임
+    localparam IDLE = 0, ADDR_SAVE = 1, ADDR_MATCH = 2, DATA_WRITE = 3, DATA_READ = 4;  //FSM 상태관리
+    reg [2:0] state, state_next;
+    reg [7:0] shift_reg, shift_next;  //변동용 레지스터
+    reg [7:0] read_only_reg, read_only_next;
+    reg [3:0] bit_count_reg, bit_count_next;
+    reg sda_out_en_reg, sda_out_en_next;  //주도권용
+    reg sda_out_reg, sda_out_next;  //SDA값조절용
+    reg addr_match_reg, addr_match_next;
+
+
+    assign SDA_0 = sda_out_en_reg ? sda_out_reg : 1'bz;
+    assign slv_state = state;
+    
+    always @(negedge SCL_0) begin
+        if (reset) begin
+            state <= IDLE;
+            shift_reg <= 0;
+            bit_count_reg <= 0;
+            sda_out_en_reg <= 0;
+            sda_out_reg <= 0;
+            addr_match_reg <= 0;
+            read_only_reg <= 0;
+            led <= 0;
+        end else begin
+            state <= state_next;
+            shift_reg <= shift_next;
+            bit_count_reg <= bit_count_next;
+            sda_out_en_reg <= sda_out_en_next;
+            sda_out_reg <= sda_out_next;
+            addr_match_reg <= addr_match_next;
+            read_only_reg <= read_only_next;
+        end
+        if (state == DATA_WRITE && bit_count_reg == 7) begin
+            led <= {shift_reg[6:0], SDA_0};
+        end
+    end
+
+
+    always @(*) begin
+        state_next = state;
+        shift_next = shift_reg;
+        bit_count_next = bit_count_reg;
+        sda_out_en_next = sda_out_en_reg;
+        addr_match_next = addr_match_reg;
+        read_only_next = read_only_reg;
+        sda_out_next = sda_out_reg;
+        case (state)
+            IDLE: begin
+                sda_out_en_next = 1'b0;  // sda(ALK) 주도권x
+                shift_next = 0;
+                bit_count_next = 0;
+                addr_match_next = 0;
+                state_next = ADDR_SAVE;
+            end
+            ADDR_SAVE: begin
+                sda_out_en_next = 1'b0;  // sda(ALK) 주도권x
+                if (bit_count_reg < 7) begin  //7비트 주소 받음
+                    shift_next = {shift_reg[6:0], SDA_0};
+                    bit_count_next = bit_count_reg + 1;
+                end else begin
+                    shift_next = {shift_reg[6:0], SDA_0};  // R/W결정
+                    sda_out_en_next = 1'b1;  //NACK
+                    sda_out_next = 1'b0;
+                    state_next = ADDR_MATCH;
+                end
+            end
+            ADDR_MATCH: begin
+                sda_out_en_next = 1'b0;  // sda(ALK) 주도권x
+                if ((shift_reg[7:1] == LED_Slave_ADDR)) begin  // 주소가 같다면
+                    if (shift_reg[0] == 1'b0) begin
+                        addr_match_next = 1'b1;
+                        sda_out_en_next = 1'b0;
+                        bit_count_next = 0;
+                        state_next = DATA_WRITE;
+                    end else if (shift_reg[0] == 1'b1) begin  //읽기모드이면
+                        addr_match_next = 1'b1;
+                        sda_out_en_next = 1'b1;
+                        sda_out_next = 1'b0;
+                        bit_count_next = 0;
+                        sda_out_next = read_only_reg[7];  //타이밍맞추기용 전송시작
+                        state_next = DATA_READ;
+                    end
+                end else begin
+                    addr_match_next = 1'b0;
+                    sda_out_en_next = 1'b0;  //NACK
+                    sda_out_next = 1'b0;
+                    bit_count_next = 0;
+                    state_next = IDLE;
+                end
+            end
+            DATA_WRITE: begin
+                sda_out_en_next = 1'b0;  // sda(ALK) 주도권x
+                if (addr_match_reg) begin
+                    if (bit_count_reg < 7) begin  //8비트 데이터 수신
+                        shift_next = {shift_reg[6:0], SDA_0};
+                        bit_count_next = bit_count_reg + 1;
+                    end else begin  //끝나면
+                        sda_out_en_next = 1'b1;
+                        sda_out_next = 1'b0;
+                        addr_match_next = 0;
+                        read_only_next = {shift_reg[6:0], SDA_0};
+                        bit_count_next = 0;
+                    end
+                end else begin
+                    shift_next = 0;
+                    state_next = IDLE;
+                end
+            end
+            DATA_READ: begin  //4 
+                sda_out_en_next = 1'b0;  // sda(ALK) 주도권x
+                if (addr_match_reg) begin
+                    if (bit_count_reg < 7) begin
+                        sda_out_en_next = 1'b1;
+                        sda_out_next = read_only_reg[7-(bit_count_reg+1)];
+                        bit_count_next = bit_count_reg + 1;
+                    end else begin  //끝나면
+                        sda_out_en_next = 1'b0;  //주도권 x 
+                        addr_match_next = 0;
+                    end
+                end else begin  //read 절차 종료
+                    bit_count_next = 0;
+                    shift_next = 0;
+                    state_next = IDLE;
+                end
+            end
+        endcase
+    end
+endmodule

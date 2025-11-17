@@ -1,0 +1,344 @@
+`timescale 1ns/1ps
+import uvm_pkg::*;
+`include "uvm_macros.svh"
+
+// ============================================================
+// SPI Interface
+// ============================================================
+interface spi_if (input bit clk);
+  logic reset;
+
+  logic        cpol;
+  logic        cpha;
+  logic        start;
+  logic [7:0]  tx_data;
+  logic [7:0]  rx_data;
+  logic        done;
+  logic        ready;
+
+  logic        MISO;  // TB drives (loopback)
+  logic        SCLK;  // DUT drives
+  logic        MOSI;  // DUT drives
+
+  modport drv_mp (
+    input  clk, input reset,
+    output cpol, output cpha, output start, output tx_data,
+    input  rx_data, input done, input ready
+  );
+
+  modport mon_mp (
+    input  clk, input reset,
+    input  cpol, input cpha, input start, input tx_data,
+    input  rx_data, input done, input ready,
+    input  SCLK, input MOSI, input MISO
+  );
+endinterface : spi_if
+
+// ============================================================
+// Sequence Item
+// ============================================================
+class spi_seq_item extends uvm_sequence_item;
+  rand bit [7:0] data;
+
+  `uvm_object_utils_begin(spi_seq_item)
+    `uvm_field_int(data, UVM_ALL_ON)
+  `uvm_object_utils_end
+
+  function new(string name="spi_seq_item");
+    super.new(name);
+  endfunction
+endclass
+
+// ============================================================
+// Generator : +NUM_ITEMS, +PATTERN=RAMP|RANDOM
+// ============================================================
+class comp_gen extends uvm_component;
+  `uvm_component_utils(comp_gen)
+
+  uvm_analysis_port #(spi_seq_item) ap;
+
+  // --- 선언을 클래스 맴버로 빼기 ---
+  spi_seq_item tr;
+  int unsigned n_items = 128;
+  string pattern = "RANDOM";
+
+  function new(string name="GEN", uvm_component parent=null);
+    super.new(name, parent);
+    ap = new("ap", this);
+  endfunction
+
+  task run_phase(uvm_phase phase);
+    phase.raise_objection(this);
+
+    void'($value$plusargs("NUM_ITEMS=%d", n_items));
+    void'($value$plusargs("PATTERN=%s", pattern));
+    `uvm_info("GEN", $sformatf("CONFIG: NUM_ITEMS=%0d, PATTERN=%s", n_items, pattern), UVM_LOW)
+
+    // 루프 안에서는 '대입'만 수행
+    for (int i = 0; i < n_items; i++) begin
+      tr = spi_seq_item::type_id::create($sformatf("tr%0d", i), this);
+      if (pattern.tolower() == "ramp") tr.data = i[7:0];
+      else                             void'(tr.randomize());
+      ap.write(tr);
+      `uvm_info("GEN", $sformatf("SEND 0x%02h", tr.data), UVM_LOW)
+      #(2_000);
+    end
+
+    phase.drop_objection(this);
+  endtask
+endclass
+
+// ============================================================
+// Driver  (analysis_imp → queue + event)
+// ============================================================
+class comp_drv extends uvm_component;
+  `uvm_component_utils(comp_drv)
+
+  virtual spi_if.drv_mp vif;
+  uvm_analysis_imp #(spi_seq_item, comp_drv) imp;
+
+  // --- 전역(클래스 맴버)으로 선언 ---
+  spi_seq_item tr;
+  spi_seq_item cpy;
+  spi_seq_item q[$];
+  uvm_event    kick;
+
+  function new(string name="DRV", uvm_component parent=null);
+    super.new(name, parent);
+    imp  = new("imp", this);
+    kick = new("kick");
+  endfunction
+
+  // analysis_imp는 'function'이므로 block/대기 금지
+  function void write(spi_seq_item t);
+    cpy = spi_seq_item::type_id::create("cpy", this);
+    cpy.copy(t);
+    q.push_back(cpy);
+    kick.trigger();
+  endfunction
+
+  task run_phase(uvm_phase phase);
+    @(negedge vif.reset);
+    vif.cpol    <= 1'b0;
+    vif.cpha    <= 1'b0;
+    vif.start   <= 1'b0;
+    vif.tx_data <= '0;
+
+    forever begin
+      if (q.size() == 0) begin
+        kick.wait_on(); kick.reset();
+        if (q.size() == 0) continue;
+      end
+
+      // --- 선언은 이미 위에서 했으니 대입만 ---
+      tr = q.pop_front();
+
+      @(posedge vif.clk);
+      vif.tx_data <= tr.data;
+      @(posedge vif.clk);
+      vif.start   <= 1'b1;
+      @(posedge vif.clk);
+      vif.start   <= 1'b0;
+
+      // done 기다림
+      do @(posedge vif.clk); while (vif.done !== 1'b1);
+
+      `uvm_info("DRV",
+        $sformatf("DRIVEN 0x%02h (ready=%0b, done=%0b, rx=0x%02h)",
+                  tr.data, vif.ready, vif.done, vif.rx_data), UVM_LOW)
+
+      @(posedge vif.clk);
+    end
+  endtask
+endclass
+
+// ============================================================
+// Monitor
+// ============================================================
+class comp_mon extends uvm_component;
+  `uvm_component_utils(comp_mon)
+
+  virtual spi_if.mon_mp vif;
+  uvm_analysis_port #(spi_seq_item) ap;
+
+  // --- 핸들 미리 선언 ---
+  spi_seq_item obs;
+
+  function new(string name="MON", uvm_component parent=null);
+    super.new(name, parent);
+    ap = new("ap", this);
+  endfunction
+
+  task run_phase(uvm_phase phase);
+    @(negedge vif.reset);
+    forever begin
+      @(posedge vif.clk);
+      if (vif.done) begin
+        obs = spi_seq_item::type_id::create("obs", this);
+        obs.data = vif.rx_data;
+        ap.write(obs);
+        `uvm_info("MON", $sformatf("OBS 0x%02h", obs.data), UVM_LOW)
+      end
+    end
+  endtask
+endclass
+
+// ============================================================
+// Scoreboard (PASS/FAIL)
+// ============================================================
+`uvm_analysis_imp_decl(_exp)
+`uvm_analysis_imp_decl(_obs)
+
+class comp_scb extends uvm_component;
+  `uvm_component_utils(comp_scb)
+
+  uvm_analysis_imp_exp #(spi_seq_item, comp_scb) exp_imp;
+  uvm_analysis_imp_obs #(spi_seq_item, comp_scb) obs_imp;
+
+  bit [7:0] exp_q[$];
+  bit [7:0] golden; // --- 미리 선언 ---
+
+  function new(string name="SCB", uvm_component parent=null);
+    super.new(name, parent);
+    exp_imp = new("exp_imp", this);
+    obs_imp = new("obs_imp", this);
+  endfunction
+
+  function void write_exp(spi_seq_item t);
+    exp_q.push_back(t.data);
+  endfunction
+
+  function void write_obs(spi_seq_item t);
+    if (exp_q.size() == 0) begin
+      `uvm_error("SCB", $sformatf("FAIL: OBS=0x%02h but expected queue empty!", t.data))
+      return;
+    end
+    golden = exp_q.pop_front();
+    if (golden !== t.data)
+      `uvm_error ("SCB", $sformatf("FAIL: TX=0x%02h  RX=0x%02h", golden, t.data))
+    else
+      `uvm_info  ("SCB", $sformatf("PASS: 0x%02h", t.data), UVM_LOW)
+  endfunction
+endclass
+
+// ============================================================
+// ENV
+// ============================================================
+class spi_env extends uvm_env;
+  `uvm_component_utils(spi_env)
+
+  comp_gen gen;
+  comp_drv drv;
+  comp_mon mon;
+  comp_scb scb;
+
+  virtual spi_if.drv_mp vif_drv;
+  virtual spi_if.mon_mp vif_mon;
+
+  function new(string name="ENV", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    gen = comp_gen::type_id::create("GEN", this);
+    drv = comp_drv::type_id::create("DRV", this);
+    mon = comp_mon::type_id::create("MON", this);
+    scb = comp_scb::type_id::create("SCB", this);
+
+    if (!uvm_config_db#(virtual spi_if.drv_mp)::get(this, "", "vif_drv", vif_drv))
+      `uvm_fatal("ENV", "vif_drv not set")
+    if (!uvm_config_db#(virtual spi_if.mon_mp)::get(this, "", "vif_mon", vif_mon))
+      `uvm_fatal("ENV", "vif_mon not set")
+
+    drv.vif = vif_drv;
+    mon.vif = vif_mon;
+  endfunction
+
+  function void connect_phase(uvm_phase phase);
+    super.connect_phase(phase);
+    gen.ap.connect(drv.imp);
+    gen.ap.connect(scb.exp_imp);
+    mon.ap.connect(scb.obs_imp);
+  endfunction
+endclass
+
+// ============================================================
+// TEST (+UVM_TESTNAME=test)
+// ============================================================
+class spi_test extends uvm_test;
+  `uvm_component_utils(spi_test)
+  spi_env m_env;
+
+  function new(string name="spi_test", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m_env = spi_env::type_id::create("ENV", this);
+  endfunction
+
+  function void start_of_simulation_phase(uvm_phase phase);
+    super.start_of_simulation_phase(phase);
+    uvm_top.set_report_verbosity_level_hier(UVM_LOW);
+    uvm_root::get().print_topology();
+  endfunction
+endclass
+
+class test extends spi_test;
+  `uvm_component_utils(test)
+  function new(string name="test", uvm_component parent=null);
+    super.new(name, parent);
+  endfunction
+endclass
+
+// ============================================================
+// TB TOP
+// ============================================================
+module tb_spi_top;
+
+  bit clk = 0;
+  always #5 clk = ~clk; // 100 MHz
+
+  spi_if spi_if0(clk);
+
+  // DUT
+  spi_top dut (
+    .clk    (clk),
+    .reset  (spi_if0.reset),
+    .cpol   (spi_if0.cpol),
+    .cpha   (spi_if0.cpha),
+    .start  (spi_if0.start),
+    .tx_data(spi_if0.tx_data),
+    .rx_data(spi_if0.rx_data),
+    .done   (spi_if0.done),
+    .ready  (spi_if0.ready),
+    .SCLK   (spi_if0.SCLK),
+    .MOSI   (spi_if0.MOSI),
+    .MISO   (spi_if0.MISO)
+  );
+
+  // 루프백: MOSI → MISO
+  assign spi_if0.MISO = spi_if0.MOSI;
+
+  // Reset
+  initial begin
+    spi_if0.reset = 1'b1;
+    repeat (10) @(posedge clk);
+    spi_if0.reset = 1'b0;
+  end
+
+  // FSDB
+  initial begin
+    $fsdbDumpfile("./build/wave.fsdb");
+    $fsdbDumpvars(0, tb_spi_top);
+  end
+
+  // UVM 시작
+  initial begin
+    uvm_config_db#(virtual spi_if.drv_mp)::set(null, "uvm_test_top.ENV", "vif_drv", spi_if0);
+    uvm_config_db#(virtual spi_if.mon_mp)::set(null, "uvm_test_top.ENV", "vif_mon", spi_if0);
+    run_test(); // +UVM_TESTNAME=test
+  end
+endmodule
